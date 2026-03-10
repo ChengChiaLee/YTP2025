@@ -125,6 +125,18 @@ function placeLoc(place) {
   };
 }
 
+function placeIdentityKey(place) {
+  if (!place) return "unknown:";
+  if (place.place_id) return `pid:${place.place_id}`;
+
+  const loc = placeLoc(place);
+  if (loc) {
+    return `geo:${loc.lat.toFixed(6)},${loc.lng.toFixed(6)}:${String(place.name || "")}`;
+  }
+
+  return `name:${String(place.name || "")}`;
+}
+
 function boundsAreaKm2(bounds) {
   const ne = bounds.getNorthEast();
   const sw = bounds.getSouthWest();
@@ -443,12 +455,44 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
 
   const source = "src";
   const sink = "sink";
-  const keyOf = (stage, idx) => `${stage}:${idx}`;
 
   const dist = new Map();
   const arrivalAt = new Map();
   const prev = new Map();
   const heap = new MinHeap();
+  const stateMeta = new Map();
+  const stateKeyBySignature = new Map();
+  let stateCounter = 0;
+
+  const signatureOf = (stage, idx, usedRestaurantKeys) => `${stage}|${idx}|${JSON.stringify(usedRestaurantKeys)}`;
+  const getOrCreateStateKey = (stage, idx, usedRestaurantKeys) => {
+    const signature = signatureOf(stage, idx, usedRestaurantKeys);
+    const existing = stateKeyBySignature.get(signature);
+    if (existing) return existing;
+
+    const key = `n${stateCounter++}`;
+    stateKeyBySignature.set(signature, key);
+    stateMeta.set(key, { stage, idx, usedRestaurantKeys });
+    return key;
+  };
+
+  const relax = (fromKey, fromPlace, toStage, toIdx, departMinute, slot, usedRestaurantKeys) => {
+    const toPlace = layers[toStage][toIdx];
+    const toIdentityKey = placeIdentityKey(toPlace);
+    if (usedRestaurantKeys.includes(toIdentityKey)) return;
+
+    const edge = edgeCost(fromPlace, toPlace, departMinute, slot);
+    if (edge.cost >= CONFIG.INF_COST || edge.arrival == null) return;
+
+    const toKey = getOrCreateStateKey(toStage, toIdx, usedRestaurantKeys.concat(toIdentityKey));
+    const newCost = (dist.get(fromKey) ?? CONFIG.INF_COST) + edge.cost;
+    if (newCost < (dist.get(toKey) ?? CONFIG.INF_COST)) {
+      dist.set(toKey, newCost);
+      arrivalAt.set(toKey, edge.arrival);
+      prev.set(toKey, fromKey);
+      heap.push({ key: toKey, cost: newCost });
+    }
+  };
 
   dist.set(source, 0);
   arrivalAt.set(source, MEAL_SLOTS[requiredMeals[0]].start);
@@ -461,31 +505,18 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
     if (currentCost == null || top.cost !== currentCost) continue;
     if (top.key === sink) break;
 
-    const relax = (fromKey, toKey, fromPlace, toPlace, departMinute, slot) => {
-      const edge = edgeCost(fromPlace, toPlace, departMinute, slot);
-      if (edge.cost >= CONFIG.INF_COST || edge.arrival == null) return;
-
-      const newCost = (dist.get(fromKey) ?? CONFIG.INF_COST) + edge.cost;
-      if (newCost < (dist.get(toKey) ?? CONFIG.INF_COST)) {
-        dist.set(toKey, newCost);
-        arrivalAt.set(toKey, edge.arrival);
-        prev.set(toKey, fromKey);
-        heap.push({ key: toKey, cost: newCost });
-      }
-    };
-
     if (top.key === source) {
       const firstMeal = requiredMeals[0];
       const firstSlot = MEAL_SLOTS[firstMeal];
-      layers[0].forEach((cand, j) => {
-        relax(source, keyOf(0, j), originPlace, cand, firstSlot.start, firstSlot);
+      layers[0].forEach((_, j) => {
+        relax(source, originPlace, 0, j, firstSlot.start, firstSlot, []);
       });
       continue;
     }
 
-    const [stageStr, idxStr] = top.key.split(":");
-    const stage = Number(stageStr);
-    const idx = Number(idxStr);
+    const meta = stateMeta.get(top.key);
+    if (!meta) continue;
+    const { stage, idx, usedRestaurantKeys } = meta;
     const fromPlace = layers[stage][idx];
     const depart = (arrivalAt.get(top.key) ?? MEAL_SLOTS[requiredMeals[stage]].start) + CONFIG.DINING_DURATION_MIN;
 
@@ -500,20 +531,26 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
 
     const nextStage = stage + 1;
     const nextSlot = MEAL_SLOTS[requiredMeals[nextStage]];
-    layers[nextStage].forEach((cand, j) => {
-      relax(top.key, keyOf(nextStage, j), fromPlace, cand, depart, nextSlot);
+    layers[nextStage].forEach((_, j) => {
+      relax(top.key, fromPlace, nextStage, j, depart, nextSlot, usedRestaurantKeys);
     });
   }
 
-  if (!prev.has(sink)) throw new Error("找不到符合時間區間的餐廳路徑");
+  if (!prev.has(sink)) throw new Error("找不到符合時間區間且餐廳不重複的路徑");
 
   const path = Array(requiredMeals.length).fill(null);
   let cursor = prev.get(sink);
   while (cursor && cursor !== source) {
-    const [s, j] = cursor.split(":").map(Number);
-    path[s] = layers[s][j];
+    const meta = stateMeta.get(cursor);
+    if (!meta) break;
+    path[meta.stage] = layers[meta.stage][meta.idx];
     cursor = prev.get(cursor);
   }
+
+  if (path.some((x) => !x)) {
+    throw new Error("找不到完整且餐廳不重複的路徑");
+  }
+
   return path;
 }
 

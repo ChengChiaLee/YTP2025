@@ -76,6 +76,41 @@
       gap: 6px;
     }
 
+    .weight-panel {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .weight-group {
+      display: grid;
+      gap: 4px;
+    }
+
+    .weight-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      color: #37474f;
+    }
+
+    .weight-value {
+      color: #1565c0;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .weight-slider {
+      width: 100%;
+      accent-color: #1565c0;
+    }
+
+    .weight-hint {
+      font-size: 12px;
+      color: #607d8b;
+    }
+
     .btn-row {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -258,6 +293,33 @@
       <label class="meal-chip"><input type="checkbox" data-meal="dessert" checked>甜點</label>
       <label class="meal-chip"><input type="checkbox" data-meal="dinner" checked>晚餐</label>
       <label class="meal-chip"><input type="checkbox" data-meal="night" checked>消夜</label>
+    </div>
+
+    <div class="divider"></div>
+    <div>權重設定</div>
+    <div class="weight-panel">
+      <div class="weight-group">
+        <label class="weight-label" for="rating-weight">
+          <span>評分權重</span>
+          <span id="rating-weight-value" class="weight-value">0.0</span>
+        </label>
+        <input id="rating-weight" class="weight-slider" type="range" min="0" max="30" step="0.5">
+      </div>
+      <div class="weight-group">
+        <label class="weight-label" for="distance-weight">
+          <span>距離權重</span>
+          <span id="distance-weight-value" class="weight-value">0.00</span>
+        </label>
+        <input id="distance-weight" class="weight-slider" type="range" min="0" max="1" step="0.01">
+      </div>
+      <div class="weight-group">
+        <label class="weight-label" for="random-pick-count">
+          <span>每段隨機景點數</span>
+          <span id="random-pick-count-value" class="weight-value">0</span>
+        </label>
+        <input id="random-pick-count" class="weight-slider" type="range" min="0" max="8" step="1">
+      </div>
+      <div class="weight-hint">評分權重越高越偏好高星店家，距離權重越高越偏好近距離移動；每段隨機景點數可調整想去的景點數量。</div>
     </div>
 
     <div class="btn-row">

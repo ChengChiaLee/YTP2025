@@ -236,7 +236,7 @@ function shuffle(arr) {
 
 function getTodayIntervalsFromPeriods(periods, bufferMin) {
   if (!Array.isArray(periods) || periods.length === 0) {
-    return [[0, 24 * 60]];
+    return [];
   }
 
   const today = new Date().getDay();
@@ -261,7 +261,7 @@ function getTodayIntervalsFromPeriods(periods, bufferMin) {
     }
   });
 
-  if (intervals.length === 0) return [[0, 24 * 60]];
+  if (intervals.length === 0) return [];
 
   return intervals
     .map(([s, e]) => [s, Math.max(s, e - bufferMin)])
@@ -274,8 +274,17 @@ function intersectWindow(intervals, start, end) {
 }
 
 function canArriveAt(place, minute) {
-  if (!Array.isArray(place.openIntervals) || place.openIntervals.length === 0) return true;
+  if (!Array.isArray(place.openIntervals) || place.openIntervals.length === 0) return false;
   return place.openIntervals.some(([s, e]) => minute >= s && minute <= e);
+}
+
+function isRestaurantOperational(place) {
+  const rawStatus = String(place && place.business_status ? place.business_status : "");
+  const normalized = rawStatus.toUpperCase();
+  if (!normalized) return true;
+  if (normalized === "CLOSED_TEMPORARILY" || normalized === "CLOSED_PERMANENTLY") return false;
+  if (rawStatus.includes("暫停營業")) return false;
+  return true;
 }
 
 function isLikelyDessertPlace(place) {
@@ -303,6 +312,7 @@ function classifyRestaurants(restaurants, requiredMeals) {
   };
 
   safeArray(restaurants).forEach((r) => {
+    if (!isRestaurantOperational(r)) return;
     requiredMeals.forEach((meal) => {
       const slot = MEAL_SLOTS[meal];
       if (!slot) return;
@@ -537,7 +547,7 @@ function getDetails(placeId) {
     placesService.getDetails(
       {
         placeId,
-        fields: ["place_id", "name", "rating", "user_ratings_total", "geometry", "types", "opening_hours", "formatted_address"]
+        fields: ["place_id", "name", "rating", "user_ratings_total", "geometry", "types", "opening_hours", "formatted_address", "business_status"]
       },
       (result, status) => {
         if (status === google.maps.places.PlacesServiceStatus.OK && result) {
@@ -622,7 +632,8 @@ async function collectRestaurantsInRect(bounds) {
 
   const deduped = Array.from(uniqueMap.values());
   const detailed = await enrichOpenHours(deduped);
-  return sortByWeightDesc(detailed);
+  const operationalOnly = detailed.filter((r) => isRestaurantOperational(r));
+  return sortByWeightDesc(operationalOnly);
 }
 
 async function collectAttractionsAroundRestaurant(restaurant, radiusMeters) {

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Travel Planner</title>
+  <style>
+    :root {
+      --panel-bg: rgba(255, 255, 255, 0.95);
+      --primary: #1565c0;
+      --primary-dark: #003c8f;
+      --muted: #607d8b;
+      --danger: #b71c1c;
+      --border: #d7dee3;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: "Noto Sans TC", "PingFang TC", "Heiti TC", sans-serif;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    #control-panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 5;
+      width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
+      overflow: auto;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+      padding: 12px;
+      box-sizing: border-box;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    #status {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .divider {
+      border-top: 1px solid var(--border);
+      margin: 12px 0;
+    }
+
+    .meal-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .meal-chip {
+      font-size: 14px;
+      background: #f5f8fb;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: 9px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #fff;
+      background: var(--primary);
+    }
+
+    .btn:hover {
+      background: var(--primary-dark);
+    }
+
+    .btn:disabled {
+      background: #90a4ae;
+      cursor: not-allowed;
+    }
+
+    #restart-btn {
+      background: var(--danger);
+    }
+
+    .route-row {
+      font-size: 13px;
+      padding: 4px 0;
+      border-bottom: 1px dashed #e7eef3;
+    }
+
+    .segment-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 8px;
+      background: #fff;
+    }
+
+    .segment-block h4 {
+      margin: 0 0 6px;
+      font-size: 14px;
+    }
+
+    .segment-meta {
+      font-size: 12px;
+      color: #546e7a;
+      margin-bottom: 6px;
+    }
+
+    .selected-list {
+      margin-bottom: 6px;
+    }
+
+    .spot-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 6px;
+      align-items: center;
+      padding: 4px 0;
+      border-bottom: 1px dotted #ecf0f3;
+    }
+
+    .spot-name {
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .order-badge {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: #1565c0;
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .row-actions {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .move-btn,
+    .remove-btn {
+      border: 1px solid #d0d9df;
+      background: #f8fbfd;
+      color: #37474f;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 3px 6px;
+    }
+
+    .remove-btn {
+      border-color: #ffcdd2;
+      background: #ffebee;
+      color: #c62828;
+    }
+
+    .empty {
+      font-size: 12px;
+      color: #90a4ae;
+      padding: 4px 0;
+    }
+
+    details summary {
+      cursor: pointer;
+      color: #455a64;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    details ul {
+      margin: 6px 0 0;
+      padding-left: 18px;
+      font-size: 12px;
+      color: #37474f;
+    }
+
+    .cand-list {
+      margin-top: 8px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .cand-row {
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 6px;
+      align-items: center;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 4px 2px;
+      border-bottom: 1px dotted #ecf0f3;
+    }
+
+    .cand-rank {
+      color: #607d8b;
+      font-weight: 700;
+      min-width: 26px;
+    }
+
+    @media (max-width: 680px) {
+      #control-panel {
+        width: calc(100vw - 16px);
+        left: 8px;
+        top: 8px;
+        max-height: 55vh;
+      }
+
+      .btn-row {
+        grid-template-columns: 1fr;
+      }
+
+      .meal-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="control-panel">
+    <h3>行程規劃工具</h3>
+    <p id="status">載入中...</p>
+
+    <div class="divider"></div>
+    <div>選擇餐別</div>
+    <div class="meal-grid">
+      <label class="meal-chip"><input type="checkbox" data-meal="breakfast" checked>早餐</label>
+      <label class="meal-chip"><input type="checkbox" data-meal="lunch" checked>午餐</label>
+      <label class="meal-chip"><input type="checkbox" data-meal="dessert" checked>甜點</label>
+      <label class="meal-chip"><input type="checkbox" data-meal="dinner" checked>晚餐</label>
+      <label class="meal-chip"><input type="checkbox" data-meal="night" checked>消夜</label>
+    </div>
+
+    <div class="btn-row">
+      <button id="generate-btn" class="btn">產生推薦路徑</button>
+      <button id="reroll-btn" class="btn" disabled>重抽候選景點</button>
+      <button id="restart-btn" class="btn">重新開始</button>
+    </div>
+
+    <div class="divider"></div>
+    <div><strong>餐廳路徑</strong></div>
+    <div id="meal-route"><div class="empty">尚未產生</div></div>
+
+    <div class="divider"></div>
+    <div><strong>景點向量（func.11）</strong></div>
+    <div id="segment-vectors"><div class="empty">尚未產生</div></div>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

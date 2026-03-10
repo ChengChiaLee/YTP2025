@@ -1,6 +1,6 @@
 // config.js
 const CONFIG = {
-  GOOGLE_MAPS_API_KEY: "AIzaSyA5eVlbS3-4YvS80rD00pMhFeWzxtdkbkY",
+  GOOGLE_MAPS_API_KEY: ,
 
   // 成本控制
   MAX_RECT_AREA_KM2: 5.0,

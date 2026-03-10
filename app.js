@@ -7,6 +7,33 @@ let directionsRenderer;
 let selectedRectangle = null;
 let routeDrawToken = 0;
 
+const WEIGHT_LIMITS = {
+  rating: { min: 0, max: 30, digits: 1 },
+  distance: { min: 0, max: 1, digits: 2 }
+};
+
+const DEFAULT_SCORING_WEIGHTS = {
+  rating: clampNumber(CONFIG.RATING_WEIGHT, WEIGHT_LIMITS.rating.min, WEIGHT_LIMITS.rating.max, 12),
+  distance: clampNumber(CONFIG.TRAVEL_WEIGHT, WEIGHT_LIMITS.distance.min, WEIGHT_LIMITS.distance.max, 0.08)
+};
+
+const RANDOM_PICK_LIMITS = (() => {
+  const topPool = Math.max(0, Math.floor(Number(CONFIG.TOP_RANDOM_POOL) || 0));
+  const manualMaxRaw = Number(CONFIG.MAX_MANUAL_PICK_PER_SEGMENT);
+  const manualMax = Number.isFinite(manualMaxRaw) && manualMaxRaw >= 0 ? Math.floor(manualMaxRaw) : topPool;
+  const max = Math.max(0, Math.min(topPool, manualMax));
+  return { min: 0, max };
+})();
+
+const DEFAULT_RANDOM_PICK_COUNT = Math.floor(
+  clampNumber(
+    CONFIG.MAX_RANDOM_PICK_PER_SEGMENT,
+    RANDOM_PICK_LIMITS.min,
+    RANDOM_PICK_LIMITS.max,
+    Math.min(1, RANDOM_PICK_LIMITS.max)
+  )
+);
+
 const overlays = {
   markers: [],
   circles: [],
@@ -28,7 +55,9 @@ const plannerState = {
   mealPath: [],
   perRestaurantAttractions: {},
   segmentCandidates: [],
-  segmentSelections: []
+  segmentSelections: [],
+  scoringWeights: { ...DEFAULT_SCORING_WEIGHTS },
+  randomPickCount: DEFAULT_RANDOM_PICK_COUNT
 };
 
 const MEAL_SLOTS = {
@@ -62,24 +91,14 @@ function explainPlacesStatus(status) {
   return `Places API 失敗: ${status}`;
 }
 
-function explainDirectionsStatus(status) {
-  if (status === google.maps.DirectionsStatus.REQUEST_DENIED) {
-    return "Google Directions 被拒絕。請確認：Billing 已啟用、Maps JavaScript API / Directions API / Places API 已啟用、API Key referrer 已允許目前網址。";
-  }
-  if (status === google.maps.DirectionsStatus.MAX_WAYPOINTS_EXCEEDED) {
-    return "途經點太多，請減少候選景點數量後重試。";
-  }
-  if (status === google.maps.DirectionsStatus.ZERO_RESULTS) {
-    return "Google 找不到可步行路線，請調整景點順序或刪除過遠點。";
-  }
-  if (status === google.maps.DirectionsStatus.OVER_QUERY_LIMIT) {
-    return "Google Directions 查詢量超限，請稍後再試。";
-  }
-  return `Google Directions 失敗: ${status}`;
-}
-
 function safeArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function clampNumber(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
 }
 
 function minuteToLabel(minute) {
@@ -144,6 +163,52 @@ function getRequiredMeals() {
   });
 }
 
+function setWeightLabel(elementId, value, digits) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.textContent = Number(value).toFixed(digits);
+}
+
+function syncRandomPickCountFromControls() {
+  const randomPickInput = document.getElementById("random-pick-count");
+  const countRaw = clampNumber(
+    randomPickInput ? randomPickInput.value : plannerState.randomPickCount,
+    RANDOM_PICK_LIMITS.min,
+    RANDOM_PICK_LIMITS.max,
+    plannerState.randomPickCount
+  );
+  const count = Math.floor(countRaw);
+
+  plannerState.randomPickCount = count;
+  if (randomPickInput) randomPickInput.value = String(count);
+  setWeightLabel("random-pick-count-value", count, 0);
+}
+
+function syncScoringWeightsFromControls() {
+  const ratingInput = document.getElementById("rating-weight");
+  const distanceInput = document.getElementById("distance-weight");
+
+  const rating = clampNumber(
+    ratingInput ? ratingInput.value : plannerState.scoringWeights.rating,
+    WEIGHT_LIMITS.rating.min,
+    WEIGHT_LIMITS.rating.max,
+    plannerState.scoringWeights.rating
+  );
+  const distance = clampNumber(
+    distanceInput ? distanceInput.value : plannerState.scoringWeights.distance,
+    WEIGHT_LIMITS.distance.min,
+    WEIGHT_LIMITS.distance.max,
+    plannerState.scoringWeights.distance
+  );
+
+  plannerState.scoringWeights = { rating, distance };
+  if (ratingInput) ratingInput.value = String(rating);
+  if (distanceInput) distanceInput.value = String(distance);
+
+  setWeightLabel("rating-weight-value", rating, WEIGHT_LIMITS.rating.digits);
+  setWeightLabel("distance-weight-value", distance, WEIGHT_LIMITS.distance.digits);
+}
+
 function placeWeight(place) {
   // Function 4: 景點/餐廳權重（星數）
   return Number(place && place.rating ? place.rating : 0);
@@ -158,11 +223,6 @@ function sortByWeightDesc(vector) {
       if (diff !== 0) return diff;
       return Number(b.user_ratings_total || 0) - Number(a.user_ratings_total || 0);
     });
-}
-
-function randomInt(min, max) {
-  if (max < min) return min;
-  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function shuffle(arr) {
@@ -303,8 +363,10 @@ function edgeCost(u, v, departMinute, slot) {
     return { cost: CONFIG.INF_COST, arrival: null, rawArrival: arrival, travelMin };
   }
 
-  const starPenalty = (5 - placeWeight(v)) * CONFIG.RATING_WEIGHT;
-  const travelPenalty = travelMin * CONFIG.TRAVEL_WEIGHT;
+  const ratingWeight = plannerState.scoringWeights.rating;
+  const distanceWeight = plannerState.scoringWeights.distance;
+  const starPenalty = (5 - placeWeight(v)) * ratingWeight;
+  const travelPenalty = travelMin * distanceWeight;
   const totalCost = timePenalty + starPenalty + travelPenalty;
 
   return { cost: totalCost, arrival, rawArrival: arrival, travelMin };
@@ -359,7 +421,7 @@ class MinHeap {
   }
 }
 
-function chooseMealPathDijkstraCore(requiredMeals, mealBuckets, originPlace) {
+function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
   // Function 8: Dijkstra（分層圖）
   if (requiredMeals.length === 0) return [];
 
@@ -443,42 +505,6 @@ function chooseMealPathDijkstraCore(requiredMeals, mealBuckets, originPlace) {
     cursor = prev.get(cursor);
   }
   return path;
-}
-
-function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
-  // 在 Dijkstra 結果上加上「餐廳不可重複」限制
-  const workingBuckets = {};
-  requiredMeals.forEach((meal) => {
-    workingBuckets[meal] = safeArray(mealBuckets[meal]).slice();
-  });
-
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    const path = chooseMealPathDijkstraCore(requiredMeals, workingBuckets, originPlace);
-    const seen = new Set();
-    let dupIndex = -1;
-    let dupId = null;
-
-    for (let i = 0; i < path.length; i += 1) {
-      const id = path[i] && path[i].place_id ? path[i].place_id : null;
-      if (!id) continue;
-      if (seen.has(id)) {
-        dupIndex = i;
-        dupId = id;
-        break;
-      }
-      seen.add(id);
-    }
-
-    if (dupIndex < 0) return path;
-
-    const meal = requiredMeals[dupIndex];
-    workingBuckets[meal] = safeArray(workingBuckets[meal]).filter((x) => x.place_id !== dupId);
-    if (workingBuckets[meal].length === 0) {
-      throw new Error(`${MEAL_SLOTS[meal].label} 候選不足，無法避免同店重複`);
-    }
-  }
-
-  throw new Error("無法在限制次數內找到不重複餐廳路徑");
 }
 
 function nearbySearchAll(request, maxResults = 60) {
@@ -648,46 +674,32 @@ function buildSegmentVectors(path, perRestaurantAttractions) {
   return vectors;
 }
 
-function pickTopKRandom(vector) {
-  // Function 12: 選前 k，k 為 random
+function pickTopKRandom(vector, desiredCount = plannerState.randomPickCount) {
+  // Function 12: 從前 k_pool 隨機選固定數量
   const pool = safeArray(vector).slice(0, CONFIG.TOP_RANDOM_POOL);
   if (pool.length === 0) return [];
 
-  const maxK = Math.min(CONFIG.MAX_RANDOM_PICK_PER_SEGMENT, pool.length);
-  const minK = Math.min(1, maxK);
-  const k = randomInt(minK, maxK);
+  const maxK = Math.min(pool.length, RANDOM_PICK_LIMITS.max);
+  const k = Math.max(RANDOM_PICK_LIMITS.min, Math.min(Math.floor(desiredCount), maxK));
+  if (k === 0) return [];
   return shuffle(pool).slice(0, k);
 }
 
 function buildInitialSelections(segmentVectors) {
   // Function 13: 依序丟入 func.12
-  const used = new Set();
-  return segmentVectors.map((vec) => {
-    const filtered = safeArray(vec).filter((x) => x.place_id && !used.has(x.place_id));
-    const picked = pickTopKRandom(filtered);
-    picked.forEach((x) => {
-      if (x && x.place_id) used.add(x.place_id);
-    });
-    return picked;
-  });
+  return segmentVectors.map((vec) => pickTopKRandom(vec, plannerState.randomPickCount));
 }
 
 function rerollSelections() {
   if (!plannerState.segmentCandidates.length) return;
+  syncRandomPickCountFromControls();
   plannerState.segmentSelections = buildInitialSelections(plannerState.segmentCandidates);
   renderAll();
-  setStatus("已重新抽選候選景點");
+  setStatus(`已重新抽選候選景點（每段 ${plannerState.randomPickCount} 個）`);
 }
 
 function findSegmentCandidate(segIdx, placeId) {
   return safeArray(plannerState.segmentCandidates[segIdx]).find((x) => x.place_id === placeId) || null;
-}
-
-function isSpotSelectedInOtherSegments(segIdx, placeId) {
-  return plannerState.segmentSelections.some((list, idx) => {
-    if (idx === segIdx) return false;
-    return safeArray(list).some((x) => x.place_id === placeId);
-  });
 }
 
 function toggleSegmentCandidate(segIdx, placeId, checked) {
@@ -697,10 +709,6 @@ function toggleSegmentCandidate(segIdx, placeId, checked) {
 
   if (checked) {
     if (existingIdx >= 0) return;
-    if (isSpotSelectedInOtherSegments(segIdx, placeId)) {
-      setStatus("此景點已在其他區段選取，請避免重複");
-      return;
-    }
     if (list.length >= maxManual) {
       setStatus(`每段最多 ${maxManual} 個景點，請先移除再新增`);
       return;
@@ -793,14 +801,11 @@ function renderSegmentVectors() {
         .map((item, rank) => {
           const id = item.place_id || "";
           const checked = selectedSet.has(id) ? "checked" : "";
-          const selectedElsewhere = !selectedSet.has(id) && isSpotSelectedInOtherSegments(segIdx, id);
-          const disabled = selectedElsewhere ? "disabled" : "";
-          const disabledText = selectedElsewhere ? "（已在其他段選取）" : "";
           return `
             <label class="cand-row">
-              <input type="checkbox" class="cand-toggle" data-seg="${segIdx}" data-id="${id}" ${checked} ${disabled}>
+              <input type="checkbox" class="cand-toggle" data-seg="${segIdx}" data-id="${id}" ${checked}>
               <span class="cand-rank">#${rank + 1}</span>
-              <span>${item.name || "(無名稱)"} (${(item.rating || 0).toFixed(1)}★) ${disabledText}</span>
+              <span>${item.name || "(無名稱)"} (${(item.rating || 0).toFixed(1)}★)</span>
             </label>
           `;
         })
@@ -924,7 +929,7 @@ function drawRoute() {
       if (status === google.maps.DirectionsStatus.OK && result) {
         directionsRenderer.setDirections(result);
       } else {
-        setStatus(explainDirectionsStatus(status));
+        setStatus(`步行路徑規劃失敗: ${status}`);
       }
     }
   );
@@ -1110,8 +1115,52 @@ function wireControls() {
   const generateBtn = document.getElementById("generate-btn");
   const rerollBtn = document.getElementById("reroll-btn");
   const restartBtn = document.getElementById("restart-btn");
+  const ratingInput = document.getElementById("rating-weight");
+  const distanceInput = document.getElementById("distance-weight");
+  const randomPickInput = document.getElementById("random-pick-count");
+
+  if (randomPickInput) {
+    randomPickInput.min = String(RANDOM_PICK_LIMITS.min);
+    randomPickInput.max = String(RANDOM_PICK_LIMITS.max);
+    randomPickInput.step = "1";
+    randomPickInput.value = String(plannerState.randomPickCount);
+  }
+  syncRandomPickCountFromControls();
+
+  if (ratingInput) ratingInput.value = String(plannerState.scoringWeights.rating);
+  if (distanceInput) distanceInput.value = String(plannerState.scoringWeights.distance);
+  syncScoringWeightsFromControls();
+
+  [ratingInput, distanceInput].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", () => {
+      syncScoringWeightsFromControls();
+    });
+    input.addEventListener("change", () => {
+      if (plannerState.mealPath.length) {
+        setStatus("權重已更新，請重新產生推薦路徑");
+      }
+    });
+  });
+
+  if (randomPickInput) {
+    randomPickInput.addEventListener("input", () => {
+      syncRandomPickCountFromControls();
+    });
+    randomPickInput.addEventListener("change", () => {
+      if (plannerState.segmentCandidates.length) {
+        plannerState.segmentSelections = buildInitialSelections(plannerState.segmentCandidates);
+        renderAll();
+        setStatus(`已更新每段隨機景點數為 ${plannerState.randomPickCount}`);
+      } else if (plannerState.mealPath.length) {
+        setStatus("此路徑沒有景點 segment，隨機景點數設定已更新");
+      }
+    });
+  }
 
   generateBtn.addEventListener("click", async () => {
+    syncRandomPickCountFromControls();
+    syncScoringWeightsFromControls();
     await generatePlan();
   });
 

@@ -65,6 +65,40 @@
       margin-top: 8px;
     }
 
+    .time-panel {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .time-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .time-field {
+      display: grid;
+      gap: 4px;
+      font-size: 13px;
+      color: #37474f;
+    }
+
+    .time-input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 13px;
+    }
+
+    .eta-note {
+      font-size: 12px;
+      color: #607d8b;
+      margin-bottom: 4px;
+    }
+
     .meal-chip {
       font-size: 14px;
       background: #f5f8fb;
@@ -277,6 +311,10 @@
       .meal-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
+
+      .time-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -293,6 +331,37 @@
       <label class="meal-chip"><input type="checkbox" data-meal="dessert" checked>甜點</label>
       <label class="meal-chip"><input type="checkbox" data-meal="dinner" checked>晚餐</label>
       <label class="meal-chip"><input type="checkbox" data-meal="night" checked>消夜</label>
+    </div>
+
+    <div class="divider"></div>
+    <div>時間設定</div>
+    <div class="time-panel">
+      <label class="time-field">
+        <span>開始時間</span>
+        <input id="start-time" class="time-input" type="time" value="08:00">
+      </label>
+      <div class="time-grid">
+        <label class="time-field">
+          <span>早餐用餐（分鐘）</span>
+          <input id="meal-duration-breakfast" class="time-input" type="number" min="10" max="180" step="5">
+        </label>
+        <label class="time-field">
+          <span>午餐用餐（分鐘）</span>
+          <input id="meal-duration-lunch" class="time-input" type="number" min="10" max="180" step="5">
+        </label>
+        <label class="time-field">
+          <span>甜點停留（分鐘）</span>
+          <input id="meal-duration-dessert" class="time-input" type="number" min="10" max="180" step="5">
+        </label>
+        <label class="time-field">
+          <span>晚餐用餐（分鐘）</span>
+          <input id="meal-duration-dinner" class="time-input" type="number" min="10" max="180" step="5">
+        </label>
+        <label class="time-field">
+          <span>消夜用餐（分鐘）</span>
+          <input id="meal-duration-night" class="time-input" type="number" min="10" max="180" step="5">
+        </label>
+      </div>
     </div>
 
     <div class="divider"></div>
@@ -331,6 +400,11 @@
     <div class="divider"></div>
     <div><strong>餐廳路徑</strong></div>
     <div id="meal-route"><div class="empty">尚未產生</div></div>
+
+    <div class="divider"></div>
+    <div><strong>預估到達時間（假設開車）</strong></div>
+    <div class="eta-note">以開始時間、各餐停留時間與直線距離推估車程。</div>
+    <div id="eta-route"><div class="empty">尚未產生</div></div>
 
     <div class="divider"></div>
     <div><strong>景點向量（func.11）</strong></div>

@@ -34,6 +34,25 @@ const DEFAULT_RANDOM_PICK_COUNT = Math.floor(
   )
 );
 
+const START_TIME_LIMITS = { min: 0, max: 24 * 60 - 1 };
+const MEAL_DURATION_LIMITS = { min: 10, max: 180 };
+const DEFAULT_START_MINUTE = Math.round(
+  clampNumber(CONFIG.DEFAULT_START_MINUTE, START_TIME_LIMITS.min, START_TIME_LIMITS.max, 8 * 60)
+);
+const DEFAULT_MEAL_DURATION_MIN = Math.round(
+  clampNumber(CONFIG.DINING_DURATION_MIN, MEAL_DURATION_LIMITS.min, MEAL_DURATION_LIMITS.max, 50)
+);
+const DEFAULT_MEAL_DURATIONS = {
+  breakfast: DEFAULT_MEAL_DURATION_MIN,
+  lunch: DEFAULT_MEAL_DURATION_MIN,
+  dessert: DEFAULT_MEAL_DURATION_MIN,
+  dinner: DEFAULT_MEAL_DURATION_MIN,
+  night: DEFAULT_MEAL_DURATION_MIN
+};
+const DRIVING_SPEED_M_PER_MIN = Number(CONFIG.DRIVING_SPEED_M_PER_MIN) > 0
+  ? Number(CONFIG.DRIVING_SPEED_M_PER_MIN)
+  : 500;
+
 const overlays = {
   markers: [],
   circles: [],
@@ -57,7 +76,10 @@ const plannerState = {
   segmentCandidates: [],
   segmentSelections: [],
   scoringWeights: { ...DEFAULT_SCORING_WEIGHTS },
-  randomPickCount: DEFAULT_RANDOM_PICK_COUNT
+  randomPickCount: DEFAULT_RANDOM_PICK_COUNT,
+  startMinute: DEFAULT_START_MINUTE,
+  mealDurations: { ...DEFAULT_MEAL_DURATIONS },
+  stopSchedule: []
 };
 
 const MEAL_SLOTS = {
@@ -106,6 +128,26 @@ function minuteToLabel(minute) {
   const h = Math.floor(m / 60) % 24;
   const mm = m % 60;
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function minuteToTimeInputValue(minute) {
+  const safeMinute = Math.round(
+    clampNumber(minute, START_TIME_LIMITS.min, START_TIME_LIMITS.max, DEFAULT_START_MINUTE)
+  );
+  const h = Math.floor(safeMinute / 60) % 24;
+  const mm = safeMinute % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function timeInputToMinute(value) {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const mins = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(mins)) return null;
+  if (hours < 0 || hours > 23 || mins < 0 || mins > 59) return null;
+  return hours * 60 + mins;
 }
 
 function hhmmToMinute(hhmm) {
@@ -165,6 +207,7 @@ function resetPlannerStateKeepBounds() {
   plannerState.perRestaurantAttractions = {};
   plannerState.segmentCandidates = [];
   plannerState.segmentSelections = [];
+  plannerState.stopSchedule = [];
 }
 
 function getRequiredMeals() {
@@ -219,6 +262,41 @@ function syncScoringWeightsFromControls() {
 
   setWeightLabel("rating-weight-value", rating, WEIGHT_LIMITS.rating.digits);
   setWeightLabel("distance-weight-value", distance, WEIGHT_LIMITS.distance.digits);
+}
+
+function mealDurationFor(mealKey, source = plannerState.mealDurations) {
+  return Math.round(
+    clampNumber(
+      source ? source[mealKey] : DEFAULT_MEAL_DURATION_MIN,
+      MEAL_DURATION_LIMITS.min,
+      MEAL_DURATION_LIMITS.max,
+      DEFAULT_MEAL_DURATION_MIN
+    )
+  );
+}
+
+function syncTimeSettingsFromControls() {
+  const startInput = document.getElementById("start-time");
+  const parsedStart = timeInputToMinute(startInput ? startInput.value : "");
+  const startMinute = Math.round(
+    clampNumber(
+      parsedStart == null ? plannerState.startMinute : parsedStart,
+      START_TIME_LIMITS.min,
+      START_TIME_LIMITS.max,
+      plannerState.startMinute
+    )
+  );
+  plannerState.startMinute = startMinute;
+  if (startInput) startInput.value = minuteToTimeInputValue(startMinute);
+
+  const nextDurations = { ...plannerState.mealDurations };
+  MEAL_ORDER.forEach((meal) => {
+    const input = document.getElementById(`meal-duration-${meal}`);
+    const next = mealDurationFor(meal, { ...nextDurations, [meal]: input ? input.value : nextDurations[meal] });
+    nextDurations[meal] = next;
+    if (input) input.value = String(next);
+  });
+  plannerState.mealDurations = nextDurations;
 }
 
 function placeWeight(place) {
@@ -281,13 +359,12 @@ function getTodayIntervalsFromPeriods(periods, bufferMin) {
     .sort((a, b) => a[0] - b[0]);
 }
 
-function intersectWindow(intervals, start, end) {
-  return safeArray(intervals).some(([s, e]) => Math.max(s, start) < Math.min(e, end));
+function isOpenToday(place) {
+  return Array.isArray(place.openIntervals) && place.openIntervals.length > 0;
 }
 
-function canArriveAt(place, minute) {
-  if (!Array.isArray(place.openIntervals) || place.openIntervals.length === 0) return false;
-  return place.openIntervals.some(([s, e]) => minute >= s && minute <= e);
+function canArriveAt(place, _minute) {
+  return isOpenToday(place);
 }
 
 function isRestaurantOperational(place) {
@@ -325,12 +402,10 @@ function classifyRestaurants(restaurants, requiredMeals) {
 
   safeArray(restaurants).forEach((r) => {
     if (!isRestaurantOperational(r)) return;
-    requiredMeals.forEach((meal) => {
-      const slot = MEAL_SLOTS[meal];
-      if (!slot) return;
+    if (!isOpenToday(r)) return;
 
-      const openFit = intersectWindow(r.openIntervals, slot.start, slot.end);
-      if (!openFit) return;
+    requiredMeals.forEach((meal) => {
+      if (!MEAL_SLOTS[meal]) return;
 
       if (meal === "dessert" && !isLikelyDessertPlace(r)) {
         if (placeWeight(r) < 3.8) return;
@@ -360,6 +435,17 @@ function estimateTravelMinutes(fromPlace, toPlace) {
     new google.maps.LatLng(toLoc.lat, toLoc.lng)
   );
   return meters / CONFIG.TRAVEL_SPEED_M_PER_MIN;
+}
+
+function estimateDrivingMinutes(fromPlace, toPlace) {
+  const fromLoc = placeLoc(fromPlace);
+  const toLoc = placeLoc(toPlace);
+  if (!fromLoc || !toLoc) return 99999;
+  const meters = google.maps.geometry.spherical.computeDistanceBetween(
+    new google.maps.LatLng(fromLoc.lat, fromLoc.lng),
+    new google.maps.LatLng(toLoc.lat, toLoc.lng)
+  );
+  return meters / DRIVING_SPEED_M_PER_MIN;
 }
 
 function edgeCost(u, v, departMinute, slot) {
@@ -443,9 +529,19 @@ class MinHeap {
   }
 }
 
-function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
+function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace, options = {}) {
   // Function 8: Dijkstra（分層圖）
   if (requiredMeals.length === 0) return [];
+  const startMinute = Math.round(
+    clampNumber(
+      options.startMinute,
+      START_TIME_LIMITS.min,
+      START_TIME_LIMITS.max,
+      MEAL_SLOTS[requiredMeals[0]].start
+    )
+  );
+  const mealDurations = options.mealDurations || plannerState.mealDurations;
+  const getMealDuration = (mealKey) => mealDurationFor(mealKey, mealDurations);
 
   const layers = requiredMeals.map((meal) => {
     const list = safeArray(mealBuckets[meal]);
@@ -495,7 +591,7 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
   };
 
   dist.set(source, 0);
-  arrivalAt.set(source, MEAL_SLOTS[requiredMeals[0]].start);
+  arrivalAt.set(source, startMinute);
   heap.push({ key: source, cost: 0 });
 
   while (heap.size > 0) {
@@ -509,7 +605,7 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
       const firstMeal = requiredMeals[0];
       const firstSlot = MEAL_SLOTS[firstMeal];
       layers[0].forEach((_, j) => {
-        relax(source, originPlace, 0, j, firstSlot.start, firstSlot, []);
+        relax(source, originPlace, 0, j, startMinute, firstSlot, []);
       });
       continue;
     }
@@ -518,7 +614,7 @@ function chooseMealPathDijkstra(requiredMeals, mealBuckets, originPlace) {
     if (!meta) continue;
     const { stage, idx, usedRestaurantKeys } = meta;
     const fromPlace = layers[stage][idx];
-    const depart = (arrivalAt.get(top.key) ?? MEAL_SLOTS[requiredMeals[stage]].start) + CONFIG.DINING_DURATION_MIN;
+    const depart = (arrivalAt.get(top.key) ?? MEAL_SLOTS[requiredMeals[stage]].start) + getMealDuration(requiredMeals[stage]);
 
     if (stage === layers.length - 1) {
       if ((dist.get(top.key) ?? CONFIG.INF_COST) < (dist.get(sink) ?? CONFIG.INF_COST)) {
@@ -806,6 +902,55 @@ function buildOrderedStops() {
   return stops;
 }
 
+function buildDrivingSchedule(stops) {
+  const schedule = [];
+  if (!Array.isArray(stops) || stops.length === 0) return schedule;
+
+  let currentMinute = plannerState.startMinute;
+  let previousPlace = null;
+  if (plannerState.center && Number.isFinite(plannerState.center.lat) && Number.isFinite(plannerState.center.lng)) {
+    previousPlace = {
+      place_id: "__origin__",
+      name: "起點",
+      geometry: {
+        location: new google.maps.LatLng(plannerState.center.lat, plannerState.center.lng)
+      }
+    };
+  }
+
+  stops.forEach((stop) => {
+    const driveMinuteRaw = previousPlace ? estimateDrivingMinutes(previousPlace, stop.place) : 0;
+    const driveMinute = Number.isFinite(driveMinuteRaw) ? Math.max(0, driveMinuteRaw) : 0;
+    let arrivalMinute = currentMinute + driveMinute;
+
+    if (stop.type === "meal") {
+      const mealKey = plannerState.requiredMeals[stop.seg];
+      const slot = MEAL_SLOTS[mealKey];
+      if (slot && arrivalMinute < slot.start) {
+        arrivalMinute = slot.start;
+      }
+    }
+
+    const stayMinute = stop.type === "meal"
+      ? mealDurationFor(plannerState.requiredMeals[stop.seg])
+      : 0;
+    const departMinute = arrivalMinute + stayMinute;
+
+    schedule.push({
+      ...stop,
+      driveMinute,
+      arrivalMinute,
+      stayMinute,
+      departMinute
+    });
+
+    currentMinute = departMinute;
+    previousPlace = stop.place;
+  });
+
+  return schedule;
+}
+
 function mealLabel(mealKey) {
   return MEAL_SLOTS[mealKey] ? MEAL_SLOTS[mealKey].label : mealKey;
 }
@@ -970,14 +1115,14 @@ function drawRoute() {
       destination,
       waypoints,
       optimizeWaypoints: false,
-      travelMode: google.maps.TravelMode.WALKING
+      travelMode: google.maps.TravelMode.DRIVING
     },
     (result, status) => {
       if (token !== routeDrawToken) return;
       if (status === google.maps.DirectionsStatus.OK && result) {
         directionsRenderer.setDirections(result);
       } else {
-        setStatus(`步行路徑規劃失敗: ${status}`);
+        setStatus(`開車路徑規劃失敗: ${status}`);
       }
     }
   );
@@ -1000,8 +1145,41 @@ function renderSummary() {
     .join("");
 }
 
+function renderEtaSummary() {
+  const root = document.getElementById("eta-route");
+  if (!root) return;
+
+  if (!plannerState.mealPath.length) {
+    plannerState.stopSchedule = [];
+    root.innerHTML = "<div class='empty'>尚未產生時間預估</div>";
+    return;
+  }
+
+  const stops = buildOrderedStops();
+  const schedule = buildDrivingSchedule(stops);
+  plannerState.stopSchedule = schedule;
+
+  if (schedule.length === 0) {
+    root.innerHTML = "<div class='empty'>尚未產生時間預估</div>";
+    return;
+  }
+
+  root.innerHTML = schedule
+    .map((item, idx) => {
+      const name = item.place && item.place.name ? item.place.name : "(無名稱)";
+      const driveLabel = `車程約 ${Math.round(item.driveMinute)} 分`;
+      const etaLabel = `到達 ${minuteToLabel(item.arrivalMinute)}`;
+      if (item.type === "meal") {
+        return `<div class='route-row'>${idx + 1}. ${item.label}: ${name}｜${driveLabel}｜${etaLabel}｜用餐 ${item.stayMinute} 分</div>`;
+      }
+      return `<div class='route-row'>${idx + 1}. ${item.label}: ${name}｜${driveLabel}｜${etaLabel}</div>`;
+    })
+    .join("");
+}
+
 function renderAll() {
   renderSummary();
+  renderEtaSummary();
   renderSegmentVectors();
   drawRoute();
 }
@@ -1017,6 +1195,8 @@ async function collectAttractionsForPath(path) {
 }
 
 async function generatePlan() {
+  syncTimeSettingsFromControls();
+
   if (!plannerState.bounds) {
     setStatus("請先畫矩形區域");
     return;
@@ -1058,7 +1238,10 @@ async function generatePlan() {
     };
 
     setStatus("使用 Dijkstra 計算最優餐廳路徑中...");
-    const mealPath = chooseMealPathDijkstra(requiredMeals, mealBuckets, origin);
+    const mealPath = chooseMealPathDijkstra(requiredMeals, mealBuckets, origin, {
+      startMinute: plannerState.startMinute,
+      mealDurations: plannerState.mealDurations
+    });
     plannerState.mealPath = mealPath;
 
     if (mealPath.length <= 1) {
@@ -1163,9 +1346,23 @@ function wireControls() {
   const generateBtn = document.getElementById("generate-btn");
   const rerollBtn = document.getElementById("reroll-btn");
   const restartBtn = document.getElementById("restart-btn");
+  const startTimeInput = document.getElementById("start-time");
   const ratingInput = document.getElementById("rating-weight");
   const distanceInput = document.getElementById("distance-weight");
   const randomPickInput = document.getElementById("random-pick-count");
+  const mealDurationInputs = MEAL_ORDER
+    .map((meal) => document.getElementById(`meal-duration-${meal}`))
+    .filter(Boolean);
+
+  if (startTimeInput) startTimeInput.value = minuteToTimeInputValue(plannerState.startMinute);
+  mealDurationInputs.forEach((input) => {
+    input.min = String(MEAL_DURATION_LIMITS.min);
+    input.max = String(MEAL_DURATION_LIMITS.max);
+    input.step = "5";
+    const meal = String(input.id || "").replace("meal-duration-", "");
+    input.value = String(mealDurationFor(meal));
+  });
+  syncTimeSettingsFromControls();
 
   if (randomPickInput) {
     randomPickInput.min = String(RANDOM_PICK_LIMITS.min);
@@ -1206,9 +1403,30 @@ function wireControls() {
     });
   }
 
+  if (startTimeInput) {
+    startTimeInput.addEventListener("change", () => {
+      syncTimeSettingsFromControls();
+      if (plannerState.mealPath.length) {
+        renderAll();
+        setStatus("開始時間已更新，如要重新挑選餐廳請按『產生推薦路徑』");
+      }
+    });
+  }
+
+  mealDurationInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      syncTimeSettingsFromControls();
+      if (plannerState.mealPath.length) {
+        renderAll();
+        setStatus("用餐時間已更新，如要重新挑選餐廳請按『產生推薦路徑』");
+      }
+    });
+  });
+
   generateBtn.addEventListener("click", async () => {
     syncRandomPickCountFromControls();
     syncScoringWeightsFromControls();
+    syncTimeSettingsFromControls();
     await generatePlan();
   });
 
